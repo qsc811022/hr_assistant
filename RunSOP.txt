@@ -1,0 +1,25 @@
+執行步驟
+1. 安裝依賴
+
+pip install -r requirements.txt
+第一次執行會下載 Sentence Transformer 模型（約 400MB），需等幾分鐘。
+
+2. 確認 .env 金鑰已設定
+打開 .env，確認內容如下：
+
+
+ZAI_API_KEY=你的金鑰
+3. 啟動應用
+
+streamlit run app.py
+瀏覽器會自動開啟 http://localhost:8501
+
+執行測試（選用）
+
+pytest tests/ -v
+常見問題
+問題	解法
+ModuleNotFoundError	確認有執行 pip install -r requirements.txt
+ZAI_API_KEY not set	確認 .env 檔案存在且金鑰正確
+第一次很慢	模型下載中，等待即可，之後會快
+Port 已被使用	改用 streamlit run app.py --server.port 8502
