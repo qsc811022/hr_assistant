@@ -1,26 +1,26 @@
-"""HR Assistant Streamlit application."""
+"""Document Q&A Assistant — upload documents, configure any LLM, ask questions."""
 
 import logging
+import os
 from datetime import datetime
 from pathlib import Path
 
 import streamlit as st
 
-from config import APP_TITLE, APP_VERSION, DOCS_DIR, FAQ_QUESTIONS
+from config import APP_TITLE, APP_VERSION, DOCS_DIR
+from llm_client import PROVIDER_PRESETS, LLMClient
 from rag_core import DocumentLoadError, HRKnowledgeBase
 
 logging.basicConfig(level=logging.INFO)
 
-# ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title=APP_TITLE,
-    page_icon="🤝",
+    page_icon="📄",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-st.markdown(
-    """
+st.markdown("""
 <style>
     .doc-card {
         background: #f0f7f0;
@@ -30,51 +30,88 @@ st.markdown(
         border-radius: 0 6px 6px 0;
         font-size: 14px;
     }
-    .welcome-box {
-        text-align: center;
-        padding: 60px 20px;
-        color: #888;
-    }
-    .low-relevance {
-        color: #e67e22;
+    .provider-badge {
+        display: inline-block;
+        background: #e8f4fd;
+        color: #1a6fa0;
+        border-radius: 10px;
+        padding: 2px 10px;
         font-size: 12px;
     }
 </style>
-""",
-    unsafe_allow_html=True,
-)
+""", unsafe_allow_html=True)
 
 
 # ── Session init ──────────────────────────────────────────────────────────────
 def _init_session() -> None:
-    if "kb" in st.session_state:
-        return
-
-    st.session_state.kb = HRKnowledgeBase()
-    st.session_state.loaded_files = {}
-    st.session_state.messages = []
-    st.session_state.pending_question = None
-
-    docs_dir = Path(DOCS_DIR)
-    if docs_dir.exists():
-        for f in sorted(docs_dir.glob("*.txt")):
-            try:
-                count = st.session_state.kb.add_document(str(f))
-                st.session_state.loaded_files[f.name] = {
-                    "chunk_count": count,
-                    "loaded_at": datetime.now().strftime("%H:%M"),
-                }
-            except DocumentLoadError as exc:
-                st.warning(f"⚠️ 無法載入 {f.name}：{exc}")
+    if "kb" not in st.session_state:
+        st.session_state.kb = HRKnowledgeBase()
+        st.session_state.loaded_files = {}
+        st.session_state.messages = []
+    if "llm_client" not in st.session_state:
+        st.session_state.llm_client = None
+    if "provider_preset" not in st.session_state:
+        st.session_state.provider_preset = list(PROVIDER_PRESETS.keys())[0]
 
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 def _render_sidebar() -> None:
     with st.sidebar:
-        st.title("📂 文件管理")
+        # ── AI 設定 ──────────────────────────────────────────────────────────
+        st.subheader("⚙️ AI 設定")
+
+        preset_name = st.selectbox(
+            "服務商",
+            list(PROVIDER_PRESETS.keys()),
+            index=list(PROVIDER_PRESETS.keys()).index(st.session_state.provider_preset),
+            label_visibility="collapsed",
+        )
+        preset = PROVIDER_PRESETS[preset_name]
+        st.caption(f"💡 {preset['hint']}")
+
+        api_key = st.text_input(
+            "API Key",
+            type="password",
+            placeholder="貼上你的 API key",
+            value=_get_env_key(preset_name),
+        )
+
+        model = st.text_input(
+            "模型名稱",
+            value=preset["default_model"],
+            placeholder=preset["default_model"],
+        )
+
+        base_url = ""
+        if preset["type"] == "openai_compat":
+            base_url = st.text_input(
+                "Base URL",
+                value=preset["base_url"],
+                placeholder="https://api.example.com/v1",
+            )
+
+        if st.button("✅ 套用設定", use_container_width=True, type="primary"):
+            if not api_key and preset_name != "本機 Ollama":
+                st.error("請輸入 API Key")
+            else:
+                st.session_state.llm_client = LLMClient(preset_name, api_key, model, base_url)
+                st.session_state.provider_preset = preset_name
+                st.success(f"已套用：{preset_name} / {model}")
+
+        # 顯示目前啟用的服務商
+        if st.session_state.llm_client:
+            lc = st.session_state.llm_client
+            st.markdown(
+                f'<span class="provider-badge">🟢 {lc.preset_name} · {lc._model}</span>',
+                unsafe_allow_html=True,
+            )
+
+        st.divider()
+
+        # ── 已上傳文件 ────────────────────────────────────────────────────────
+        st.subheader("📂 已上傳文件")
 
         if st.session_state.loaded_files:
-            st.success(f"✅ 已載入 {len(st.session_state.loaded_files)} 份文件")
             for fname, meta in st.session_state.loaded_files.items():
                 st.markdown(
                     f'<div class="doc-card"><b>{fname}</b><br>'
@@ -82,47 +119,14 @@ def _render_sidebar() -> None:
                     unsafe_allow_html=True,
                 )
         else:
-            st.warning("⚠️ 尚未載入任何文件")
-
-        st.divider()
-
-        uploaded = st.file_uploader(
-            "上傳公司文件",
-            type=["txt", "pdf"],
-            accept_multiple_files=True,
-            help=f"支援 .txt 與 .pdf，單檔最大 10 MB",
-        )
-        if uploaded:
-            for file in uploaded:
-                if file.name not in st.session_state.loaded_files:
-                    save_path = Path(DOCS_DIR) / file.name
-                    save_path.parent.mkdir(exist_ok=True)
-                    save_path.write_bytes(file.read())
-                    try:
-                        with st.spinner(f"正在解析 {file.name}…"):
-                            count = st.session_state.kb.add_document(str(save_path))
-                        st.session_state.loaded_files[file.name] = {
-                            "chunk_count": count,
-                            "loaded_at": datetime.now().strftime("%H:%M"),
-                        }
-                        st.success(f"✅ {file.name}（{count} 段落）")
-                        st.rerun()
-                    except DocumentLoadError as exc:
-                        st.error(f"❌ {exc}")
-
-        st.divider()
-
-        st.subheader("💡 常見問題")
-        for q in FAQ_QUESTIONS:
-            if st.button(q, use_container_width=True, key=f"faq_{q}"):
-                st.session_state.pending_question = q
-                st.rerun()
+            st.caption("尚未上傳任何文件")
 
         st.divider()
 
         col_clear, col_export = st.columns(2)
         with col_clear:
-            if st.button("🗑️ 清除對話", use_container_width=True):
+            if st.button("🗑️ 清除對話", use_container_width=True,
+                         disabled=not st.session_state.messages):
                 st.session_state.messages = []
                 st.rerun()
         with col_export:
@@ -130,7 +134,7 @@ def _render_sidebar() -> None:
                 st.download_button(
                     "💾 匯出",
                     data=_export_markdown(),
-                    file_name=f"hr_chat_{datetime.now().strftime('%Y%m%d_%H%M')}.md",
+                    file_name=f"qa_{datetime.now().strftime('%Y%m%d_%H%M')}.md",
                     mime="text/markdown",
                     use_container_width=True,
                 )
@@ -138,63 +142,111 @@ def _render_sidebar() -> None:
         st.caption(f"{APP_TITLE} v{APP_VERSION}")
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
-def _export_markdown() -> str:
-    lines = [
-        f"# HR 小幫手對話記錄\n",
-        f"匯出時間：{datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n",
-    ]
+# ── Upload page（無文件時）────────────────────────────────────────────────────
+def _render_upload_page() -> None:
+    st.title(f"📄 {APP_TITLE}")
+
+    st.markdown("""
+    <div style="text-align:center;padding:50px 20px;color:#888">
+        <div style="font-size:56px;margin-bottom:16px">📂</div>
+        <h3 style="color:#555">請先上傳你的文件</h3>
+        <p>支援 <b>.txt</b> 與 <b>.pdf</b>，上傳後即可提問</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    uploaded = st.file_uploader(
+        "選擇或拖曳文件",
+        type=["txt", "pdf"],
+        accept_multiple_files=True,
+        label_visibility="collapsed",
+    )
+    if uploaded:
+        _process_uploads(uploaded)
+
+
+# ── Chat page（有文件後）──────────────────────────────────────────────────────
+def _render_chat_page() -> None:
+    st.title(f"📄 {APP_TITLE}")
+
+    # 補充上傳（側欄底部）
+    with st.sidebar:
+        st.subheader("➕ 新增文件")
+        extra = st.file_uploader(
+            "上傳更多文件",
+            type=["txt", "pdf"],
+            accept_multiple_files=True,
+            label_visibility="collapsed",
+            key="extra_upload",
+        )
+        if extra:
+            _process_uploads(extra)
+
+    # 對話歷史
     for msg in st.session_state.messages:
-        role_label = "**員工**" if msg["role"] == "user" else "**HR 小幫手**"
-        lines.append(f"{role_label}：{msg['content']}\n")
-        if msg.get("sources"):
-            unique = list({r["source"] for r in msg["sources"]})
-            lines.append(f"> 參考來源：{', '.join(unique)}\n")
-        lines.append("\n")
-    return "".join(lines)
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+            if msg.get("sources"):
+                unique = list({r["source"] for r in msg["sources"]})
+                st.caption("📄 參考來源：" + "　·　".join(unique))
+
+    # 輸入框
+    question = st.chat_input("輸入問題，AI 將搜尋你的文件後回答…")
+    if question:
+        _handle_question(question)
 
 
-def _render_message(msg: dict) -> None:
-    with st.chat_message(msg["role"]):
-        st.markdown(msg["content"])
-        if msg.get("sources"):
-            unique = list({r["source"] for r in msg["sources"]})
-            st.caption("📄 參考來源：" + "　·　".join(unique))
+# ── 處理上傳 ──────────────────────────────────────────────────────────────────
+def _process_uploads(files) -> None:
+    docs_dir = Path(DOCS_DIR)
+    docs_dir.mkdir(exist_ok=True)
+    any_new = False
+
+    for file in files:
+        if file.name in st.session_state.loaded_files:
+            continue
+        save_path = docs_dir / file.name
+        save_path.write_bytes(file.read())
+        try:
+            with st.spinner(f"正在解析 {file.name}…"):
+                count = st.session_state.kb.add_document(str(save_path))
+            st.session_state.loaded_files[file.name] = {
+                "chunk_count": count,
+                "loaded_at": datetime.now().strftime("%H:%M"),
+            }
+            st.toast(f"✅ {file.name} 載入完成（{count} 段落）")
+            any_new = True
+        except DocumentLoadError as exc:
+            st.error(f"❌ {file.name}：{exc}")
+
+    if any_new:
+        st.rerun()
 
 
+# ── 問答處理 ──────────────────────────────────────────────────────────────────
 def _handle_question(question: str) -> None:
-    question = question.strip()
+    question = question.strip()[:500]
     if not question:
         return
 
-    question = question[:500]  # enforce max length
+    if not st.session_state.llm_client:
+        st.warning("⚠️ 請先在左側「AI 設定」填入 API Key 並點擊「套用設定」")
+        return
 
     st.session_state.messages.append({"role": "user", "content": question})
     with st.chat_message("user"):
         st.markdown(question)
 
     with st.chat_message("assistant"):
-        if not st.session_state.loaded_files:
-            st.warning("⚠️ 請先在左側上傳公司文件！")
-            return
-
         try:
-            with st.spinner("搜尋相關文件中…"):
-                history = [
-                    m for m in st.session_state.messages[:-1]
-                    if m["role"] in ("user", "assistant")
-                ]
-                generator, results = st.session_state.kb.ask_stream(
-                    question, history=history
-                )
+            history = [m for m in st.session_state.messages[:-1]
+                       if m["role"] in ("user", "assistant")]
 
-            if results:
-                avg_relevance = sum(r["relevance"] for r in results) / len(results)
-                if avg_relevance < 0.3:
-                    st.markdown(
-                        '<p class="low-relevance">⚠️ 相關度較低，建議直接聯絡 HR 確認</p>',
-                        unsafe_allow_html=True,
-                    )
+            with st.spinner("Agent 搜尋文件中…"):
+                generator, results = st.session_state.llm_client.run_agent(
+                    question,
+                    st.session_state.kb.search,
+                    history=history,
+                )
 
             response = st.write_stream(generator)
 
@@ -207,43 +259,43 @@ def _handle_question(question: str) -> None:
             )
 
         except Exception as exc:
-            error_msg = f"抱歉，查詢時發生錯誤：{exc}"
-            st.error(error_msg)
+            err = f"發生錯誤：{exc}"
+            st.error(err)
             st.session_state.messages.append(
-                {"role": "assistant", "content": error_msg, "sources": []}
+                {"role": "assistant", "content": err, "sources": []}
             )
+
+
+# ── 匯出 ──────────────────────────────────────────────────────────────────────
+def _export_markdown() -> str:
+    lines = [f"# 問答記錄\n\n匯出時間：{datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n"]
+    for msg in st.session_state.messages:
+        label = "**你**" if msg["role"] == "user" else "**AI**"
+        lines.append(f"{label}：{msg['content']}\n")
+        if msg.get("sources"):
+            unique = list({r["source"] for r in msg["sources"]})
+            lines.append(f"> 來源：{', '.join(unique)}\n")
+        lines.append("\n")
+    return "".join(lines)
+
+
+def _get_env_key(preset_name: str) -> str:
+    """Pre-fill API key from environment variables if available."""
+    mapping = {
+        "Z.AI (GLM)": "ZAI_API_KEY",
+        "OpenAI": "OPENAI_API_KEY",
+        "Anthropic (Claude)": "ANTHROPIC_API_KEY",
+        "Groq (免費)": "GROQ_API_KEY",
+    }
+    env_var = mapping.get(preset_name, "")
+    return os.getenv(env_var, "") if env_var else ""
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 _init_session()
 _render_sidebar()
 
-st.title(f"🤝 {APP_TITLE}")
-st.caption("有任何關於請假、薪資、福利的問題，直接問我！")
-
-if not st.session_state.messages:
-    st.markdown(
-        """
-        <div class="welcome-box">
-            <div style="font-size:64px;margin-bottom:12px">🤝</div>
-            <h3 style="color:#555">你好！我是 HR 小幫手</h3>
-            <p>我能幫你查詢公司規定、假別制度、薪資福利等資訊</p>
-            <p style="font-size:13px">在下方輸入問題，或點選左側常見問題快速提問</p>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+if not st.session_state.loaded_files:
+    _render_upload_page()
 else:
-    for msg in st.session_state.messages:
-        _render_message(msg)
-
-# FAQ shortcut triggered from sidebar button
-if st.session_state.get("pending_question"):
-    pending = st.session_state.pending_question
-    st.session_state.pending_question = None
-    _handle_question(pending)
-
-# Direct chat input
-question = st.chat_input("請問有什麼我可以幫你的？例如：年假有幾天？")
-if question:
-    _handle_question(question)
+    _render_chat_page()

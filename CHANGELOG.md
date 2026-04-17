@@ -1,5 +1,25 @@
 # Changelog
 
+## v3.0.0 — 2026-04-17
+
+### 新增
+- **`llm_client.py`**：全新多服務商 LLM 客戶端，支援 OpenAI、Anthropic (Claude)、Z.AI、Groq、Ollama 及任意 OpenAI 相容 API
+- **AI Agent 架構**：LLM 透過 Tool Use 自主決定搜尋策略，可多次換關鍵字搜尋（最多 3 輪），再統整為最終回答
+- **側欄 AI 設定面板**：服務商選單、API Key 輸入、模型名稱、Base URL，點擊套用即生效
+- **`.streamlit/config.toml`**：關閉 Streamlit 檔案監看器，消除 torchvision 相關雜訊警告
+- 自動從環境變數（`OPENAI_API_KEY`、`ANTHROPIC_API_KEY`、`GROQ_API_KEY`）帶入 API Key
+
+### 改善
+- **`rag_core.py`**：移除所有 LLM 程式碼，職責聚焦於文件載入與語義搜尋；修正 `normalize_embeddings=True` 確保 FAISS L2 距離正確
+- **`app.py`**：改為使用者導向流程（無文件→上傳引導；有文件→問答介面）；移除 FAQ 快捷按鈕，改為通用文件問答 UI
+- **`config.py`**：移除 LLM 相關設定（已移至 `llm_client.py`），精簡為純 RAG 參數
+- **`requirements.txt`**：新增 `anthropic>=0.40.0`
+
+### 修正
+- 修正 FAISS 搜尋結果全被過濾的 bug：原因為 embedding 未正規化導致 L2 距離遠超 `MAX_DISTANCE=2.0` 閾值
+
+---
+
 ## v2.0.0 — 2026-04-17
 
 ### 新增

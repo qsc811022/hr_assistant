@@ -1,0 +1,3 @@
+[server]
+# Disable file watcher to prevent noisy torchvision warnings from transformers
+fileWatcherType = "none"

@@ -1,46 +1,28 @@
-"""RAG engine: document ingestion, embedding, search, and streaming LLM responses."""
+"""RAG engine: document ingestion, vector indexing, and semantic search."""
 
 import logging
-import os
 import time
+from pathlib import Path
+from typing import Iterator
 
 import faiss
 import numpy as np
 from dotenv import load_dotenv
-from openai import APIConnectionError, APIError, OpenAI, RateLimitError
-from pathlib import Path
 from sentence_transformers import SentenceTransformer
 
 from config import (
-    API_BASE_URL,
     CHUNK_OVERLAP,
     CHUNK_SIZE,
     EMBEDDING_MODEL,
     MAX_DISTANCE,
     MAX_FILE_SIZE_MB,
-    MAX_HISTORY_TURNS,
-    MAX_TOKENS,
-    MODEL_NAME,
-    SYSTEM_PROMPT,
     TOP_K,
 )
 
 load_dotenv()
 logger = logging.getLogger(__name__)
 
-# Module-level singletons — loaded once, reused across sessions
-_client: OpenAI | None = None
 _embedder: SentenceTransformer | None = None
-
-
-def get_client() -> OpenAI:
-    global _client
-    if _client is None:
-        api_key = os.getenv("ZAI_API_KEY")
-        if not api_key:
-            raise EnvironmentError("ZAI_API_KEY not set in environment variables")
-        _client = OpenAI(api_key=api_key, base_url=API_BASE_URL)
-    return _client
 
 
 def get_embedder() -> SentenceTransformer:
@@ -59,13 +41,13 @@ class HRKnowledgeBase:
     def __init__(self) -> None:
         self.chunks: list[str] = []
         self.sources: list[str] = []
-        self.metadata: list[dict] = []   # [{filename, loaded_at, chunk_count}]
+        self.metadata: list[dict] = []
         self.index: faiss.IndexFlatL2 | None = None
 
     # ── Public API ────────────────────────────────────────────────────────────
 
     def add_document(self, path: str) -> int:
-        """Load a document into the knowledge base. Returns number of chunks added."""
+        """Load a document into the knowledge base. Returns chunk count."""
         file_path = Path(path)
 
         if not file_path.exists():
@@ -82,9 +64,7 @@ class HRKnowledgeBase:
         except DocumentLoadError:
             raise
         except Exception as exc:
-            raise DocumentLoadError(
-                f"Failed to read {file_path.name}: {exc}"
-            ) from exc
+            raise DocumentLoadError(f"Failed to read {file_path.name}: {exc}") from exc
 
         if not text.strip():
             raise DocumentLoadError(f"File is empty: {file_path.name}")
@@ -112,7 +92,7 @@ class HRKnowledgeBase:
             return []
 
         embedder = get_embedder()
-        query_vec = embedder.encode([query])
+        query_vec = embedder.encode([query], normalize_embeddings=True)
         distances, indices = self.index.search(
             np.array(query_vec, dtype="float32"), top_k
         )
@@ -130,49 +110,6 @@ class HRKnowledgeBase:
                 )
         return results
 
-    def ask_stream(
-        self,
-        question: str,
-        history: list[dict] | None = None,
-    ) -> tuple:
-        """Stream an LLM answer grounded in retrieved chunks.
-
-        Returns (token_generator, search_results). Raises on API failure.
-        """
-        results = self.search(question)
-        if not results:
-            def _no_match():
-                yield "目前沒有找到相關文件內容，建議直接聯絡 HR 部門。"
-
-            return _no_match(), []
-
-        context = "\n\n".join(
-            f"【來源：{r['source']}】\n{r['content']}" for r in results
-        )
-
-        messages: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
-        if history:
-            for turn in history[-(MAX_HISTORY_TURNS * 2):]:
-                if turn["role"] in ("user", "assistant"):
-                    messages.append({"role": turn["role"], "content": turn["content"]})
-
-        messages.append(
-            {
-                "role": "user",
-                "content": f"參考資料：\n{context}\n\n問題：{question}",
-            }
-        )
-
-        stream = self._call_api_with_retry(messages)
-
-        def _generator():
-            for chunk in stream:
-                delta = chunk.choices[0].delta.content
-                if delta:
-                    yield delta
-
-        return _generator(), results
-
     # ── Internal helpers ──────────────────────────────────────────────────────
 
     def _read_file(self, path: Path) -> str:
@@ -182,8 +119,7 @@ class HRKnowledgeBase:
             except ImportError as exc:
                 raise DocumentLoadError("pypdf not installed; cannot read PDF files") from exc
             reader = PdfReader(str(path))
-            pages = [page.extract_text() or "" for page in reader.pages]
-            return "\n".join(pages)
+            return "\n".join(page.extract_text() or "" for page in reader.pages)
         return path.read_text(encoding="utf-8")
 
     def _split_text(self, text: str) -> list[str]:
@@ -199,33 +135,9 @@ class HRKnowledgeBase:
         if not self.chunks:
             return
         embedder = get_embedder()
-        embeddings = embedder.encode(self.chunks, show_progress_bar=False)
+        embeddings = embedder.encode(
+            self.chunks, normalize_embeddings=True, show_progress_bar=False
+        )
         dim = embeddings.shape[1]
         self.index = faiss.IndexFlatL2(dim)
         self.index.add(np.array(embeddings, dtype="float32"))
-
-    def _call_api_with_retry(self, messages: list[dict], retries: int = 3):
-        client = get_client()
-        last_error: Exception | None = None
-
-        for attempt in range(retries):
-            try:
-                return client.chat.completions.create(
-                    model=MODEL_NAME,
-                    messages=messages,
-                    max_tokens=MAX_TOKENS,
-                    stream=True,
-                )
-            except RateLimitError as exc:
-                wait = 2**attempt
-                logger.warning(
-                    "Rate limited; retrying in %ds (attempt %d/%d)", wait, attempt + 1, retries
-                )
-                time.sleep(wait)
-                last_error = exc
-            except (APIConnectionError, APIError) as exc:
-                logger.error("API error on attempt %d: %s", attempt + 1, exc)
-                last_error = exc
-                break
-
-        raise last_error or RuntimeError("LLM API call failed after retries")
