@@ -1,172 +1,256 @@
-# 🤝 HR 小幫手
+# HR Assistant - RAG 文件問答助理
 
-> 基於 RAG（檢索增強生成）技術的企業 HR 問答助手——讓員工隨時自助查詢公司規定
+HR Assistant 是一個以 Streamlit 製作的文件問答系統。使用者可以上傳公司規章、HR 政策或 FAQ 文件，系統會將文件切片、轉成向量、建立 FAISS 索引，並透過 LLM agent 查詢相關段落後回答問題。
 
-![Python](https://img.shields.io/badge/Python-3.11+-blue?logo=python)
-![Streamlit](https://img.shields.io/badge/Streamlit-1.32+-red?logo=streamlit)
-![License](https://img.shields.io/badge/License-MIT-green)
+這個專案適合放在個人作品集的 `side_project:g4`，展示 RAG、向量搜尋、LLM tool use、多模型 API 串接與 Streamlit 產品化能力。
 
----
+## Demo 流程
 
-## 📖 簡介
+1. 在側邊欄選擇 LLM provider。
+2. 輸入 API key、模型名稱與 base URL。
+3. 上傳 `.txt` 或 `.pdf` 文件。
+4. 在聊天框詢問 HR 或文件相關問題。
+5. 系統會搜尋文件片段，交給 LLM 產生回答，並顯示引用來源。
+6. 可將問答紀錄匯出成 Markdown。
 
-HR 小幫手是一個本地部署的 AI 問答系統，員工可以用自然語言詢問任何關於公司政策的問題——請假規定、薪資福利、績效考核等，系統會從公司文件中精準找到答案，並透過 GLM-4.7 大型語言模型以串流方式生成清晰回覆。
+## 主要功能
 
-**適用情境：** 公司內部員工自助服務、HR 部門文件知識庫、企業政策 QA 系統
+- 文件上傳：支援 `.txt`、`.pdf`。
+- RAG 檢索：使用 `sentence-transformers` 產生 embedding，使用 FAISS 做相似度搜尋。
+- Agent 查詢：LLM 可透過 `search_documents` tool 自主查詢文件內容。
+- 多 LLM provider：支援 Z.AI、OpenAI、Anthropic、Groq、Ollama，以及 OpenAI-compatible API。
+- 串流回覆：使用 Streamlit 即時顯示 LLM 回答。
+- 問答匯出：可下載 Markdown 格式的 Q&A 紀錄。
+- 基礎測試：`tests/test_rag_core.py` 驗證文件載入與搜尋邏輯。
 
----
+## 技術架構
 
-## ✨ 功能特色
-
-| 功能 | 說明 |
-|------|------|
-| 📄 **多文件管理** | 支援 `.txt` / `.pdf` 上傳，自動解析並建立向量索引 |
-| 🔍 **語義搜尋** | 多語言 Sentence Transformer 模型，精準匹配相關段落 |
-| 💬 **串流回覆** | Token-by-token 即時輸出，附來源引用 |
-| 💡 **常見問題快捷** | 一鍵提問，覆蓋最常見 HR 查詢場景 |
-| 📊 **相關度提示** | 搜尋結果信心分數，低相關時主動提醒 |
-| 💾 **對話匯出** | 一鍵下載 Markdown 格式的完整對話記錄 |
-| 🔄 **重試機制** | API 限流自動指數退避重試，連線穩定 |
-| 🧪 **單元測試** | 核心 RAG 引擎完整測試覆蓋 |
-
----
-
-## 🏗️ 系統架構
-
-```
-使用者問題
-    │
-    ▼
-┌─────────────────────────────────────┐
-│          Streamlit UI (app.py)       │
-│  側欄：文件管理 / FAQ / 匯出         │
-│  主區：聊天介面 / 串流回覆           │
-└──────────────┬──────────────────────┘
-               │
-               ▼
-┌─────────────────────────────────────┐
-│       HRKnowledgeBase (rag_core.py)  │
-│                                      │
-│  add_document()                      │
-│    └─ 讀取 TXT/PDF                  │
-│    └─ 文字分塊（300字/50重疊）       │
-│    └─ Sentence Transformer 向量化    │
-│    └─ 建立 FAISS 索引               │
-│                                      │
-│  search()                            │
-│    └─ 問題向量化                     │
-│    └─ FAISS L2 相似度搜尋           │
-│    └─ 相關度分數過濾                 │
-│                                      │
-│  ask_stream()                        │
-│    └─ 組合 Context + 對話歷史        │
-│    └─ 呼叫 GLM-4.7 API（串流）      │
-│    └─ 自動重試（指數退避）           │
-└─────────────────────────────────────┘
-               │
-               ▼
-         Z.AI / GLM-4.7
+```text
+Streamlit UI (app.py)
+        |
+        v
+LLM Agent (llm_client.py)
+        |
+        | tool call: search_documents(query)
+        v
+RAG Core (rag_core.py)
+        |
+        | text chunking + embedding
+        v
+FAISS Vector Index
+        |
+        v
+Uploaded HR documents / policy files
 ```
 
----
+## 專案結構
 
-## 🚀 快速開始
+```text
+hr_assistant/
+├── app.py                 # Streamlit UI 與使用者互動流程
+├── rag_core.py            # 文件讀取、切片、embedding、FAISS 搜尋
+├── llm_client.py          # 多 provider LLM client 與 agent tool-use loop
+├── config.py              # RAG 與 app 設定
+├── requirements.txt       # Python 套件清單
+├── .env.example           # 環境變數範例
+├── docs/                  # 範例文件或上傳文件
+├── tests/                 # pytest 測試
+├── RunSOP.txt             # 簡短執行 SOP
+└── CHANGELOG.md           # 版本紀錄
+```
 
-### 1. 環境需求
+## 環境需求
 
 - Python 3.11+
-- [Z.AI API 金鑰](https://api.z.ai)
+- Windows/macOS/Linux 皆可
+- 第一次執行 RAG 需要下載 embedding model：
+  `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`
+- 若使用雲端 LLM，需要對應 provider 的 API key。
+
+## 需要安裝的套件
+
+專案依賴已整理在 `requirements.txt`：
+
+```text
+streamlit
+openai
+anthropic
+sentence-transformers
+faiss-cpu
+pypdf
+python-dotenv
+numpy
+pytest
+```
+
+各套件用途：
+
+| 套件 | 用途 |
+| --- | --- |
+| `streamlit` | Web UI |
+| `openai` | OpenAI 與 OpenAI-compatible API 串接 |
+| `anthropic` | Claude API 串接 |
+| `sentence-transformers` | 產生文件與問題的 embedding |
+| `faiss-cpu` | 建立本機向量索引與相似度搜尋 |
+| `pypdf` | 讀取 PDF 文字 |
+| `python-dotenv` | 讀取 `.env` 環境變數 |
+| `numpy` | embedding array 處理 |
+| `pytest` | 單元測試 |
+
+## 安裝與執行
+
+### 1. 建立虛擬環境
+
+PowerShell:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+```
+
+macOS/Linux:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+```
 
 ### 2. 安裝依賴
 
 ```bash
-git clone <your-repo-url>
-cd hr_assistant
 pip install -r requirements.txt
 ```
 
-### 3. 設定環境變數
+第一次安裝或第一次執行會下載 embedding model，檔案可能有數百 MB。
 
-複製 `.env.example` 並填入金鑰：
+### 3. 設定 API key
+
+複製環境變數範例：
 
 ```bash
 cp .env.example .env
 ```
 
-`.env` 內容：
+Windows PowerShell:
 
-```env
-ZAI_API_KEY=your_api_key_here
+```powershell
+Copy-Item .env.example .env
 ```
 
-### 4. 啟動應用
+依你要使用的 provider 填入其中一個或多個：
+
+```env
+ZAI_API_KEY=your_zai_api_key
+OPENAI_API_KEY=your_openai_api_key
+ANTHROPIC_API_KEY=your_anthropic_api_key
+GROQ_API_KEY=your_groq_api_key
+```
+
+若使用 Ollama，本機需先啟動 Ollama server，通常不需要 API key。
+
+### 4. 啟動 Streamlit
 
 ```bash
 streamlit run app.py
 ```
 
-瀏覽器開啟 `http://localhost:8501` 即可使用。
+瀏覽器開啟：
 
----
-
-## 📁 專案結構
-
-```
-hr_assistant/
-├── app.py              # Streamlit UI 主程式
-├── rag_core.py         # RAG 引擎（文件載入、搜尋、LLM 呼叫）
-├── config.py           # 集中管理所有參數與常數
-├── requirements.txt    # Python 依賴
-├── .env                # API 金鑰（不提交 git）
-├── docs/
-│   ├── company_policy.txt   # 範例：請假與薪資福利政策
-│   └── work_rules.txt       # 範例：工作規範與績效考核
-└── tests/
-    └── test_rag_core.py     # HRKnowledgeBase 單元測試
+```text
+http://localhost:8501
 ```
 
----
+如果 8501 port 被占用：
 
-## ⚙️ 參數設定
+```bash
+streamlit run app.py --server.port 8502
+```
 
-所有可調整的參數集中於 [config.py](config.py)：
-
-| 參數 | 預設值 | 說明 |
-|------|--------|------|
-| `MODEL_NAME` | `glm-4.7` | LLM 模型名稱 |
-| `CHUNK_SIZE` | `300` | 文件分塊大小（字元數） |
-| `CHUNK_OVERLAP` | `50` | 相鄰分塊重疊長度 |
-| `TOP_K` | `3` | 每次搜尋取回的最相關段落數 |
-| `MAX_DISTANCE` | `2.0` | FAISS L2 距離過濾閾值 |
-| `MAX_HISTORY_TURNS` | `5` | 帶入 LLM 的對話歷史輪數 |
-| `MAX_FILE_SIZE_MB` | `10` | 單檔最大上傳大小 |
-| `FAQ_QUESTIONS` | 6 個預設問題 | 側欄常見問題快捷清單 |
-
----
-
-## 🧪 執行測試
+## 測試
 
 ```bash
 pytest tests/ -v
 ```
 
-測試覆蓋範圍：
-- 文件載入（正常、檔案不存在、空白檔案、多文件累積）
-- 搜尋（空知識庫、結果結構、相關度範圍、top_k 限制）
-- 串流回覆（無文件時的 fallback 行為）
+注意：
 
----
+- 測試會用到 `sentence-transformers`，第一次跑需要能連到 Hugging Face 下載 embedding model，或本機已有模型快取。
+- 目前測試檔仍包含舊版 `ask_stream()` 測試案例；若新版架構改由 `llm_client.py` 負責 LLM 串流，該測試需要同步更新。
 
-## 🛠️ 技術棧
+## 重要設定
 
-- **[Streamlit](https://streamlit.io)** — 前端介面框架
-- **[Sentence Transformers](https://www.sbert.net)** — 多語言語義向量化（`paraphrase-multilingual-MiniLM-L12-v2`）
-- **[FAISS](https://github.com/facebookresearch/faiss)** — 高效向量相似度搜尋
-- **[GLM-4.7 via Z.AI](https://api.z.ai)** — 大型語言模型（OpenAI 相容 API）
-- **[pypdf](https://pypdf.readthedocs.io)** — PDF 文字擷取
+可在 `config.py` 調整：
 
----
+| 設定 | 預設值 | 說明 |
+| --- | --- | --- |
+| `EMBEDDING_MODEL` | `paraphrase-multilingual-MiniLM-L12-v2` | 多語 embedding model |
+| `CHUNK_SIZE` | `300` | 文件切片大小 |
+| `CHUNK_OVERLAP` | `50` | 切片重疊長度 |
+| `TOP_K` | `3` | 每次搜尋回傳段落數 |
+| `MAX_DISTANCE` | `2.0` | FAISS L2 距離門檻 |
+| `MAX_FILE_SIZE_MB` | `10` | 上傳檔案大小上限 |
+| `MAX_HISTORY_TURNS` | `5` | 對話歷史保留輪數 |
+| `DOCS_DIR` | `docs` | 文件儲存資料夾 |
 
-## 📄 License
+## side_project:g4 作品集呈現
 
-MIT
+### 專案名稱
+
+HR Assistant - RAG 文件問答助理
+
+### 一句話介紹
+
+以 Streamlit、FAISS、Sentence Transformers 與 LLM tool use 打造的 HR 文件問答系統，能上傳公司規章並根據文件內容回答問題。
+
+### 專案亮點
+
+- 建立完整 RAG pipeline：文件讀取、切片、embedding、向量索引、語意搜尋。
+- 使用 FAISS 做本機向量搜尋，降低查詢延遲與外部資料庫依賴。
+- 設計 LLM agent tool-use 流程，讓模型可主動搜尋文件再回答。
+- 支援多家 LLM provider，包括 Z.AI、OpenAI、Anthropic、Groq、Ollama。
+- 用 Streamlit 快速產品化，提供上傳、聊天、引用來源、匯出紀錄等完整操作流程。
+
+### 技術棧
+
+Python 3.11, Streamlit, Sentence Transformers, FAISS, OpenAI SDK, Anthropic SDK, pypdf, pytest
+
+### 可放履歷的描述
+
+開發一套 HR 文件 RAG 問答助理，支援上傳 TXT/PDF 政策文件，使用 Sentence Transformers 產生多語 embedding，透過 FAISS 建立本機向量索引，並串接多種 LLM provider 產生具來源依據的回答。專案包含 Streamlit UI、agent tool-use 檢索流程、問答紀錄匯出與基礎測試，展示從 AI prototype 到可操作 side project 的完整實作能力。
+
+### 面試可講的技術重點
+
+- 為什麼選 FAISS：適合 side project 與本機 demo，部署簡單，查詢速度快。
+- 為什麼做 chunk overlap：避免文件切片切斷語意，提升檢索品質。
+- 為什麼使用多 provider client：降低模型供應商綁定，方便切換不同 API。
+- RAG 限制：回答品質依賴文件內容、chunk size、embedding model 與 LLM 指令設計。
+- 下一步可優化：加入持久化向量庫、重新索引機制、引用段落高亮、權限控管與更完整的 evaluation set。
+
+## 常見問題
+
+### `ModuleNotFoundError`
+
+確認已啟用虛擬環境，並重新安裝：
+
+```bash
+pip install -r requirements.txt
+```
+
+### 第一次啟動很慢
+
+`sentence-transformers` 需要下載 embedding model。下載完成後會快取，之後啟動會較快。
+
+### 無法連 Hugging Face
+
+請確認網路權限，或先在可連網環境下載模型快取。
+
+### API key 沒有讀到
+
+確認 `.env` 位於專案根目錄，且變數名稱與 provider 對應：
+
+```env
+ZAI_API_KEY=...
+OPENAI_API_KEY=...
+ANTHROPIC_API_KEY=...
+GROQ_API_KEY=...
+```
