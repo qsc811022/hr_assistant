@@ -1,9 +1,42 @@
 """Unit tests for HRKnowledgeBase."""
 
-import pytest
 from pathlib import Path
 
+import numpy as np
+import pytest
+
 from rag_core import DocumentLoadError, HRKnowledgeBase
+
+
+class FakeEmbedder:
+    """Small deterministic embedder so unit tests never need network/model downloads."""
+
+    def encode(self, texts, normalize_embeddings=True, show_progress_bar=False):
+        vectors = []
+        for text in texts:
+            year_leave = (
+                1.0
+                if "年假" in text or "七天" in text or "十天" in text
+                else 0.0
+            )
+            sick_leave = 1.0 if "病假" in text or "三十天" in text else 0.0
+            generic_policy = 1.0 if "政策" in text or "公司" in text else 0.0
+            length = min(len(text) / 100.0, 1.0)
+            vector = np.array(
+                [year_leave, sick_leave, generic_policy, length],
+                dtype="float32",
+            )
+            if normalize_embeddings:
+                norm = np.linalg.norm(vector)
+                if norm > 0:
+                    vector = vector / norm
+            vectors.append(vector)
+        return np.vstack(vectors)
+
+
+@pytest.fixture(autouse=True)
+def fake_embedder(monkeypatch):
+    monkeypatch.setattr("rag_core.get_embedder", lambda: FakeEmbedder())
 
 
 @pytest.fixture
@@ -55,6 +88,13 @@ def test_add_document_empty_file(kb, tmp_path):
         kb.add_document(str(empty))
 
 
+def test_add_document_rejects_unsupported_file_type(kb, tmp_path):
+    unsupported = tmp_path / "policy.docx"
+    unsupported.write_text("年假規定", encoding="utf-8")
+    with pytest.raises(DocumentLoadError, match="Unsupported file type"):
+        kb.add_document(str(unsupported))
+
+
 def test_add_document_multiple_files_accumulates(kb, tmp_path):
     for i in range(3):
         f = tmp_path / f"doc{i}.txt"
@@ -68,6 +108,11 @@ def test_add_document_multiple_files_accumulates(kb, tmp_path):
 
 def test_search_empty_kb_returns_empty(kb):
     assert kb.search("年假") == []
+
+
+def test_search_empty_query_returns_empty(kb, policy_doc):
+    kb.add_document(str(policy_doc))
+    assert kb.search("   ") == []
 
 
 def test_search_returns_results_after_load(kb, policy_doc):
@@ -105,10 +150,6 @@ def test_search_top_k_respected(kb, policy_doc):
     assert len(results) <= 1
 
 
-# ── ask_stream (no API call) ──────────────────────────────────────────────────
-
-def test_ask_stream_no_docs_yields_fallback(kb):
-    gen, results = kb.ask_stream("年假有幾天")
-    text = "".join(gen)
-    assert results == []
-    assert "沒有找到" in text or "沒有" in text
+def test_search_non_positive_top_k_returns_empty(kb, policy_doc):
+    kb.add_document(str(policy_doc))
+    assert kb.search("年假", top_k=0) == []

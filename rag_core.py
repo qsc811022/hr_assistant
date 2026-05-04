@@ -3,7 +3,6 @@
 import logging
 import time
 from pathlib import Path
-from typing import Iterator
 
 import faiss
 import numpy as np
@@ -23,6 +22,7 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 _embedder: SentenceTransformer | None = None
+SUPPORTED_EXTENSIONS = {".txt", ".pdf"}
 
 
 def get_embedder() -> SentenceTransformer:
@@ -52,6 +52,12 @@ class HRKnowledgeBase:
 
         if not file_path.exists():
             raise DocumentLoadError(f"File not found: {path}")
+
+        if file_path.suffix.lower() not in SUPPORTED_EXTENSIONS:
+            allowed = ", ".join(sorted(SUPPORTED_EXTENSIONS))
+            raise DocumentLoadError(
+                f"Unsupported file type: {file_path.suffix} (allowed: {allowed})"
+            )
 
         size_mb = file_path.stat().st_size / (1024 * 1024)
         if size_mb > MAX_FILE_SIZE_MB:
@@ -88,13 +94,15 @@ class HRKnowledgeBase:
 
     def search(self, query: str, top_k: int = TOP_K) -> list[dict]:
         """Return top-k semantically relevant chunks with source and relevance score."""
-        if self.index is None or not self.chunks:
+        query = query.strip()
+        if self.index is None or not self.chunks or not query or top_k <= 0:
             return []
 
         embedder = get_embedder()
         query_vec = embedder.encode([query], normalize_embeddings=True)
+        limit = min(top_k, len(self.chunks))
         distances, indices = self.index.search(
-            np.array(query_vec, dtype="float32"), top_k
+            np.array(query_vec, dtype="float32"), limit
         )
 
         results = []
@@ -124,11 +132,15 @@ class HRKnowledgeBase:
 
     def _split_text(self, text: str) -> list[str]:
         chunks, start = [], 0
+        step = CHUNK_SIZE - CHUNK_OVERLAP
+        if step <= 0:
+            raise DocumentLoadError("CHUNK_OVERLAP must be smaller than CHUNK_SIZE")
+
         while start < len(text):
             chunk = text[start : start + CHUNK_SIZE]
             if chunk.strip():
                 chunks.append(chunk)
-            start += CHUNK_SIZE - CHUNK_OVERLAP
+            start += step
         return chunks
 
     def _rebuild_index(self) -> None:

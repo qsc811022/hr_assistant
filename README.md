@@ -51,6 +51,7 @@ hr_assistant/
 ├── rag_core.py            # 文件讀取、切片、embedding、FAISS 搜尋
 ├── llm_client.py          # 多 provider LLM client 與 agent tool-use loop
 ├── config.py              # RAG 與 app 設定
+├── pyproject.toml         # pytest / lint 工具設定
 ├── requirements.txt       # Python 套件清單
 ├── .env.example           # 環境變數範例
 ├── docs/                  # 範例文件或上傳文件
@@ -169,13 +170,10 @@ streamlit run app.py --server.port 8502
 ## 測試
 
 ```bash
-pytest tests/ -v
+pytest -v
 ```
 
-注意：
-
-- 測試會用到 `sentence-transformers`，第一次跑需要能連到 Hugging Face 下載 embedding model，或本機已有模型快取。
-- 目前測試檔仍包含舊版 `ask_stream()` 測試案例；若新版架構改由 `llm_client.py` 負責 LLM 串流，該測試需要同步更新。
+測試使用 deterministic fake embedder，不會下載 Hugging Face 模型，也不會呼叫任何 LLM API；適合在 CI 或離線環境中快速驗證 RAG 核心邏輯。
 
 ## 重要設定
 

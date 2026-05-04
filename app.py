@@ -23,12 +23,27 @@ st.set_page_config(
 st.markdown("""
 <style>
     .doc-card {
-        background: #f0f7f0;
-        border-left: 3px solid #4CAF50;
-        padding: 8px 12px;
-        margin: 4px 0;
-        border-radius: 0 6px 6px 0;
+        background: linear-gradient(135deg, #e8f5ee 0%, #f7fbf8 100%);
+        border: 1px solid #8bc6a3;
+        border-left: 5px solid #1f8f55;
+        color: #173b28;
+        padding: 10px 12px;
+        margin: 8px 0;
+        border-radius: 6px;
         font-size: 14px;
+        box-shadow: 0 1px 4px rgba(20, 83, 45, 0.12);
+    }
+    .doc-card b {
+        display: block;
+        color: #0f5132;
+        font-size: 14px;
+        line-height: 1.35;
+        margin-bottom: 4px;
+        overflow-wrap: anywhere;
+    }
+    .doc-card small {
+        color: #2d5a41;
+        font-weight: 500;
     }
     .provider-badge {
         display: inline-block;

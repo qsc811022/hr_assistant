@@ -173,7 +173,7 @@ class LLMClient:
                 ],
             })
             for tc in msg.tool_calls:
-                query = json.loads(tc.function.arguments).get("query", question)
+                query = _extract_tool_query(tc.function.arguments, question)
                 logger.info("[Agent] searching: %s", query)
                 results = search_fn(query)
                 all_results.extend(results)
@@ -262,6 +262,17 @@ def _format_context(results: list[dict]) -> str:
     if not results:
         return "（搜尋未找到相關內容）"
     return "\n\n".join(f"[來源：{r['source']}]\n{r['content']}" for r in results)
+
+
+def _extract_tool_query(arguments: str, fallback: str) -> str:
+    try:
+        parsed = json.loads(arguments or "{}")
+    except json.JSONDecodeError:
+        logger.warning("Invalid tool arguments from model: %s", arguments)
+        return fallback
+
+    query = parsed.get("query")
+    return query.strip() if isinstance(query, str) and query.strip() else fallback
 
 
 def _deduplicate(results: list[dict]) -> list[dict]:
